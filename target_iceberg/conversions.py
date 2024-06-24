@@ -3,6 +3,7 @@ Conversions from Singer schema to PyArrow schema to PyIceberg schema.
 
 Taken from https://github.com/SidetrekAI/target-iceberg/blob/main/target_iceberg/iceberg.py
 """
+
 from typing import cast, Any, List, Tuple, Union
 import pyarrow as pa  # type: ignore
 from pyarrow import Schema as PyarrowSchema, Field as PyarrowField
@@ -11,7 +12,9 @@ from pyiceberg.io.pyarrow import pyarrow_to_schema
 
 
 # Borrowed from https://github.com/crowemi/target-s3/blob/main/target_s3/formats/format_parquet.py
-def singer_to_pyarrow_schema_without_field_ids(self, singer_schema: dict) -> PyarrowSchema:
+def singer_to_pyarrow_schema_without_field_ids(
+    self, singer_schema: dict
+) -> PyarrowSchema:
     """Convert singer tap json schema to pyarrow schema."""
 
     def process_anyof_schema(anyOf: List) -> Tuple[List, Union[str, None]]:
@@ -58,7 +61,11 @@ def singer_to_pyarrow_schema_without_field_ids(self, singer_schema: dict) -> Pya
             return pa.list_(get_pyarrow_schema_from_array(items=subitems, level=level))
         elif "object" in type:
             subproperties = cast(dict, items.get("properties"))
-            return pa.struct(get_pyarrow_schema_from_object(properties=subproperties, level=level + 1))
+            return pa.struct(
+                get_pyarrow_schema_from_object(
+                    properties=subproperties, level=level + 1
+                )
+            )
         else:
             return pa.null()
 
@@ -97,7 +104,11 @@ def singer_to_pyarrow_schema_without_field_ids(self, singer_schema: dict) -> Pya
                     elif format == "time":
                         fields.append(pa.field(key, pa.time64(), nullable=nullable))
                     else:
-                        fields.append(pa.field(key, pa.timestamp("us", tz="UTC"), nullable=nullable))
+                        fields.append(
+                            pa.field(
+                                key, pa.timestamp("us", tz="UTC"), nullable=nullable
+                            )
+                        )
                 else:
                     fields.append(pa.field(key, pa.string(), nullable=nullable))
             elif "array" in type:
@@ -122,7 +133,9 @@ def singer_to_pyarrow_schema_without_field_ids(self, singer_schema: dict) -> Pya
             elif "object" in type:
                 nullable = "null" in type
                 prop = val.get("properties")
-                inner_fields = get_pyarrow_schema_from_object(properties=prop, level=level + 1)
+                inner_fields = get_pyarrow_schema_from_object(
+                    properties=prop, level=level + 1
+                )
                 if not inner_fields:
                     self.logger.warn(
                         f"""key: {key} has no fields defined, this may cause
@@ -139,22 +152,33 @@ def singer_to_pyarrow_schema_without_field_ids(self, singer_schema: dict) -> Pya
     return pyarrow_schema
 
 
-def assign_pyarrow_field_ids(self, pa_fields: list[PyarrowField], field_id: int = 0) -> Tuple[list[PyarrowField], int]:
+def assign_pyarrow_field_ids(
+    self, pa_fields: list[PyarrowField], field_id: int = 0
+) -> Tuple[list[PyarrowField], int]:
     """Assign field ids to the schema."""
     new_fields = []
     for field in pa_fields:
         if isinstance(field.type, pa.StructType):
             field_indices = list(range(field.type.num_fields))
             struct_fields = [field.type.field(field_i) for field_i in field_indices]
-            nested_pa_fields, field_id = assign_pyarrow_field_ids(self, struct_fields, field_id)
+            nested_pa_fields, field_id = assign_pyarrow_field_ids(
+                self, struct_fields, field_id
+            )
             new_fields.append(
-                pa.field(field.name, pa.struct(nested_pa_fields), nullable=field.nullable, metadata=field.metadata)
+                pa.field(
+                    field.name,
+                    pa.struct(nested_pa_fields),
+                    nullable=field.nullable,
+                    metadata=field.metadata,
+                )
             )
         else:
             field_id += 1
-            field_with_metadata = field.with_metadata({"PARQUET:field_id": f"{field_id}"})
+            field_with_metadata = field.with_metadata(
+                {"PARQUET:field_id": f"{field_id}"}
+            )
             new_fields.append(field_with_metadata)
-    
+
     return new_fields, field_id
 
 

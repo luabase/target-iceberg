@@ -5,6 +5,8 @@ import os
 import shutil
 from typing import Sequence
 
+import gcsfs
+
 from . import conversions
 
 import pandas as pd
@@ -107,7 +109,8 @@ class IcebergSink(BatchSink):
                 self.logger.info("Adding new columns to the table")
                 new_iceberg_schema = conversions.pyarrow_to_pyiceberg_schema(self, pa_table.schema)
                 try:
-                    iceberg_table.update_schema(new_iceberg_schema)
+                    with iceberg_table.update_schema() as update_schema:
+                        update_schema.union_by_name(new_iceberg_schema)
                 except Exception as e:
                     self.logger.error(f"Error updating schema: {e}")
                     return
@@ -131,15 +134,30 @@ class IcebergSink(BatchSink):
         self._add_version_hint(iceberg_table)
 
     def _add_version_hint(self, iceberg_table):
-        metadata_location = iceberg_table.metadata_location.replace('file://', '')
+        metadata_location = iceberg_table.metadata_location
+        protocol = metadata_location.split(':')[0]
+
+        if protocol == 'file':
+            metadata_location = metadata_location[7:]
+        elif protocol == 'gs':
+            metadata_location = metadata_location[5:]
+        else:
+            self.logger.error(f"Unsupported metadata location: {metadata_location}")
+            return
+
         metadata_dir = os.path.dirname(metadata_location)
         new_metadata_file = os.path.join(metadata_dir, 'v1.metadata.json')
         version_hint_file = os.path.join(metadata_dir, 'version-hint.text')
 
-        shutil.copy(metadata_location, new_metadata_file)
-        self.logger.info(f"Copied metadata file to {new_metadata_file}")
+        if protocol == 'file':
+            shutil.copy(metadata_location, new_metadata_file)
+            with open(version_hint_file, 'w') as f:
+                f.write('1')
+        elif protocol == 'gs':
+            fs = gcsfs.GCSFileSystem()
+            fs.copy(metadata_location, new_metadata_file )
+            with fs.open(version_hint_file, 'w') as f:
+                f.write('1')
 
-        # Create the version-hint.text file with content "1"
-        with open(version_hint_file, 'w') as f:
-            f.write('1')
+        self.logger.info(f"Copied metadata file to {new_metadata_file}")
         self.logger.info(f"Created {version_hint_file} with content '1'")
