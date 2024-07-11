@@ -11,8 +11,16 @@ from . import conversions
 
 import pandas as pd
 import pyarrow as pa
-from pyiceberg.exceptions import NamespaceAlreadyExistsError, NoSuchTableError
 from pyiceberg.catalog.sql import SqlCatalog
+from pyiceberg.exceptions import NamespaceAlreadyExistsError, NoSuchTableError
+from pyiceberg.partitioning import PartitionField, PartitionSpec
+from pyiceberg.transforms import (
+    HourTransform,
+    DayTransform,
+    MonthTransform,
+    YearTransform,
+    IdentityTransform,
+)
 from singer_sdk import Target
 from singer_sdk.sinks import BatchSink
 
@@ -20,21 +28,28 @@ from singer_sdk.sinks import BatchSink
 class IcebergSink(BatchSink):
     """iceberg target sink class."""
 
-    max_size = 1000000
+    max_size = 10000000
 
-    def __init__(self, target: Target, stream_name: str, schema: dict, key_properties: Sequence[str] | None) -> None:
+    def __init__(
+        self,
+        target: Target,
+        stream_name: str,
+        schema: dict,
+        key_properties: Sequence[str] | None,
+    ) -> None:
         super().__init__(target, stream_name, schema, key_properties)
         self._catalog = None
-    
+
     @property
     def catalog(self):
         if self._catalog is None:
             self._catalog = SqlCatalog(
-                self.config.get("catalog_name"), 
+                self.config.get("catalog_name"),
                 **{
                     "uri": self.config.get("catalog_uri"),
                     "warehouse": self.config.get("warehouse_path"),
-                })
+                },
+            )
 
         return self._catalog
 
@@ -88,26 +103,44 @@ class IcebergSink(BatchSink):
         except NamespaceAlreadyExistsError:
             pass
 
+        # try:
+        pa_schema = conversions.singer_to_pyarrow_schema(self, self.schema)
+        # except Exception as e:
+        #     self.logger.error(f"Error converting Singer schema to PyArrow schema: {e}")
+        #     return
+
         try:
-            pa_schema = conversions.singer_to_pyarrow_schema(self, self.schema)
+            iceberg_schema = conversions.pyarrow_to_pyiceberg_schema(self, pa_schema)
         except Exception as e:
-            self.logger.error(f"Error converting Singer schema to PyArrow schema: {e}")
+            self.logger.error(
+                f"Error converting PyArrow schema to PyIceberg schema: {e}"
+            )
             return
         
-        df = pd.DataFrame(context['records'])
+        partition_spec = self._partition_config_to_partition_spec(
+            self.config.get("partition_fields"), iceberg_schema
+        )
+
+        df = pd.DataFrame(context["records"])
         pa_table = pa.Table.from_pandas(df, schema=pa_schema)
 
         iceberg_table = None
         try:
             iceberg_table = self.catalog.load_table(table_id)
-            self.logger.info(f"Table {table_id} already exists, checking for schema compatibility")
+            self.logger.info(
+                f"Table {table_id} already exists, checking for schema compatibility"
+            )
             iceberg_column_names = set([f.name for f in iceberg_table.schema().fields])
             pa_column_names = set(pa_table.schema.names)
 
             if pa_column_names - iceberg_column_names:
-                self.logger.info(f"Found new columns in the stream: {pa_column_names - iceberg_column_names}")
+                self.logger.info(
+                    f"Found new columns in the stream: {pa_column_names - iceberg_column_names}"
+                )
                 self.logger.info("Adding new columns to the table")
-                new_iceberg_schema = conversions.pyarrow_to_pyiceberg_schema(self, pa_table.schema)
+                new_iceberg_schema = conversions.pyarrow_to_pyiceberg_schema(
+                    self, pa_table.schema
+                )
                 try:
                     with iceberg_table.update_schema() as update_schema:
                         update_schema.union_by_name(new_iceberg_schema)
@@ -115,49 +148,104 @@ class IcebergSink(BatchSink):
                     self.logger.error(f"Error updating schema: {e}")
                     return
             elif iceberg_column_names - pa_column_names:
-                self.logger.warning(f"Existing columns missing in stream: {iceberg_column_names - pa_column_names}")
+                self.logger.warning(
+                    f"Existing columns missing in stream: {iceberg_column_names - pa_column_names}"
+                )
 
         except NoSuchTableError:
-            iceberg_table = self.catalog.create_table(
-                identifier=table_id,
-                schema=pa_schema,
-            )
+            if partition_spec:
+                iceberg_table = self.catalog.create_table(
+                    identifier=table_id,
+                    schema=pa_schema,
+                    partition_spec=partition_spec,
+                )
+            else:
+                iceberg_table = self.catalog.create_table(
+                    identifier=table_id,
+                    schema=pa_schema,
+                )
             self.logger.info(f"Table {self.stream_name} created")
 
-        self.logger.info(f"Writing batch to iceberg table ({len(context['records'])} records)")
+        self.logger.info(
+            f"Writing batch to iceberg table ({len(context['records'])} records)"
+        )
         try:
             iceberg_table.append(pa_table)
         except Exception as e:
             self.logger.error(f"Error writing batch to iceberg table: {e}")
             return
-        
+
         self._add_version_hint(iceberg_table)
+
+    def _partition_config_to_partition_spec(self, partition_config, iceberg_schema):
+        partition_fields = []
+
+        for field in partition_config:
+            if field.get("stream") != self.stream_name:
+                continue
+
+            source_id = self._get_field_id_by_name(iceberg_schema, field.get("source_field"))
+
+            if not source_id:
+                self.logger.error("Could not found source field", field.get("source_field"))
+                return
+
+            partition_fields.append(
+                PartitionField(
+                    source_id=source_id,
+                    field_id=source_id+1000,
+                    name=field.get("field_name") + "_" + field.get("transform"),
+                    transform=self._get_transform(field.get("transform"))
+                )
+            )
+        return PartitionSpec(partition_fields) if partition_fields else None
+
+    def _get_transform(self, transform_name):
+        match transform_name:
+            case "hour":
+                return HourTransform
+            case "day":
+                return DayTransform
+            case "month":
+                return MonthTransform
+            case "year":
+                return YearTransform
+            case "identity":
+                return IdentityTransform
+            case _:
+                raise ValueError(f"Unsupported transform: {transform_name}")
+
+    def _get_field_id_by_name(self, iceberg_schema, field_name):
+        for field in iceberg_schema.fields:
+            if field.name == field_name:
+                return field.field_id
+        return None
 
     def _add_version_hint(self, iceberg_table):
         metadata_location = iceberg_table.metadata_location
-        protocol = metadata_location.split(':')[0]
+        protocol = metadata_location.split(":")[0]
 
-        if protocol == 'file':
+        if protocol == "file":
             metadata_location = metadata_location[7:]
-        elif protocol == 'gs':
+        elif protocol == "gs":
             metadata_location = metadata_location[5:]
         else:
             self.logger.error(f"Unsupported metadata location: {metadata_location}")
             return
 
         metadata_dir = os.path.dirname(metadata_location)
-        new_metadata_file = os.path.join(metadata_dir, 'v1.metadata.json')
-        version_hint_file = os.path.join(metadata_dir, 'version-hint.text')
+        new_metadata_file = os.path.join(metadata_dir, "v1.metadata.json")
+        version_hint_file = os.path.join(metadata_dir, "version-hint.text")
 
-        if protocol == 'file':
+        if protocol == "file":
             shutil.copy(metadata_location, new_metadata_file)
-            with open(version_hint_file, 'w') as f:
-                f.write('1')
-        elif protocol == 'gs':
+            with open(version_hint_file, "w") as f:
+                f.write("1")
+        elif protocol == "gs":
             fs = gcsfs.GCSFileSystem()
-            fs.copy(metadata_location, new_metadata_file )
-            with fs.open(version_hint_file, 'w') as f:
-                f.write('1')
+            fs.copy(metadata_location, new_metadata_file)
+            with fs.open(version_hint_file, "w") as f:
+                f.write("1")
 
         self.logger.info(f"Copied metadata file to {new_metadata_file}")
         self.logger.info(f"Created {version_hint_file} with content '1'")
