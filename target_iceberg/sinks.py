@@ -179,6 +179,8 @@ class IcebergSink(BatchSink):
 
     def _partition_config_to_partition_spec(self, partition_config, iceberg_schema):
         partition_fields = []
+        if not partition_config:
+            return None
 
         for field in partition_config:
             if field.get("stream") != self.stream_name:
