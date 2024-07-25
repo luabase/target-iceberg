@@ -4,21 +4,24 @@
 
 `target-iceberg` is a Singer/Meltano target for Apache Iceberg with support for the followng:
 
-* PostgreSQL catalog backends
+* SQL catalog backends (SQLite, PostgreSQL, MySQL)
 * Local and GCS storage backends
 * Partitioning
 * "Add column" schema evolution
+* Writes a version-hint.text file for use with DuckDB (see [this issue](https://github.com/duckdb/duckdb_iceberg/issues/29))
 
 Roadmap items include:
 
 * Better source -> Iceberg type conversions. (See Known Issues.)
 * Partition schema evolution
 
-Other catalog backends (like Hive, Glue, or REST) or other storage backends (like S3) are not currently supported. You may find them in other Iceberg targets like (/taeefnajib/target-iceberg)[https://github.com/taeefnajib/target-iceberg] and (SidetrekAI/target-iceberg)[https://github.com/SidetrekAI/target-iceberg].
+Other catalog backends (like Hive, Glue, or REST) or other storage backends (like S3) are not currently supported. You may find them in other Iceberg targets like [taeefnajib/target-iceberg](https://github.com/taeefnajib/target-iceberg)and [SidetrekAI/target-iceberg](https://github.com/SidetrekAI/target-iceberg).
 
 ## Configuration
 
 Take a look at `target.py` to see configuration options. Some notes:
+
+- 'catalog_uri' is a SQLAlchemy connection string (like `sqlite:///catalog.db` or `psql+psychopg2@user:pass@hostname/db`)
 
 - `warehouse_path` is a directory URI and needs either a `file://` or `gs://` prefix.
 
