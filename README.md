@@ -1,132 +1,29 @@
 # target-iceberg
 
-`target-iceberg` is a Singer target for iceberg.
+*Disclaimer*: This repository is in early stages of development and offers no guarantees of correctness or data safety. Use with caution. Bug reports and pull requests are welcome.
 
-Build with the [Meltano Target SDK](https://sdk.meltano.com).
+`target-iceberg` is a Singer/Meltano target for Apache Iceberg with support for the followng:
 
-<!--
+* PostgreSQL catalog backends
+* Local and GCS storage backends
+* Partitioning
+* "Add column" schema evolution
 
-Developer TODO: Update the below as needed to correctly describe the install procedure. For instance, if you do not have a PyPi repo, or if you want users to directly install from your git repo, you can modify this step as appropriate.
+Roadmap items include:
 
-## Installation
+* Better source -> Iceberg type conversions. (See Known Issues.)
+* Partition schema evolution
 
-Install from PyPi:
-
-```bash
-pipx install target-iceberg
-```
-
-Install from GitHub:
-
-```bash
-pipx install git+https://github.com/ORG_NAME/target-iceberg.git@main
-```
-
--->
+Other catalog backends (like Hive, Glue, or REST) or other storage backends (like S3) are not currently supported. You may find them in other Iceberg targets like (/taeefnajib/target-iceberg)[https://github.com/taeefnajib/target-iceberg] and (SidetrekAI/target-iceberg)[https://github.com/SidetrekAI/target-iceberg].
 
 ## Configuration
 
-### Accepted Config Options
+Take a look at `target.py` to see configuration options. Some notes:
 
-<!--
-Developer TODO: Provide a list of config options accepted by the target.
+- `warehouse_path` is a directory URI and needs either a `file://` or `gs://` prefix.
 
-This section can be created by copy-pasting the CLI output from:
+- `partition_fields` is an optional array. If you do have partition fields, you need to speficy a transformation (use `identity` if you just want to partition on the field as-is) as well as a stream name. (You can specify multiple partition fields for multiple streams.)
 
-```
-target-iceberg --about --format=markdown
-```
--->
+## Known Issues
 
-A full list of supported settings and capabilities for this
-target is available by running:
-
-```bash
-target-iceberg --about
-```
-
-### Configure using environment variables
-
-This Singer target will automatically import any environment variables within the working directory's
-`.env` if the `--config=ENV` is provided, such that config values will be considered if a matching
-environment variable is set either in the terminal context or in the `.env` file.
-
-### Source Authentication and Authorization
-
-<!--
-Developer TODO: If your target requires special access on the destination system, or any special authentication requirements, provide those here.
--->
-
-## Usage
-
-You can easily run `target-iceberg` by itself or in a pipeline using [Meltano](https://meltano.com/).
-
-### Executing the Target Directly
-
-```bash
-target-iceberg --version
-target-iceberg --help
-# Test using the "Carbon Intensity" sample:
-tap-carbon-intensity | target-iceberg --config /path/to/target-iceberg-config.json
-```
-
-## Developer Resources
-
-Follow these instructions to contribute to this project.
-
-### Initialize your Development Environment
-
-```bash
-pipx install poetry
-poetry install
-```
-
-### Create and Run Tests
-
-Create tests within the `tests` subfolder and
-  then run:
-
-```bash
-poetry run pytest
-```
-
-You can also test the `target-iceberg` CLI interface directly using `poetry run`:
-
-```bash
-poetry run target-iceberg --help
-```
-
-### Testing with [Meltano](https://meltano.com/)
-
-_**Note:** This target will work in any Singer environment and does not require Meltano.
-Examples here are for convenience and to streamline end-to-end orchestration scenarios._
-
-<!--
-Developer TODO:
-Your project comes with a custom `meltano.yml` project file already created. Open the `meltano.yml` and follow any "TODO" items listed in
-the file.
--->
-
-Next, install Meltano (if you haven't already) and any needed plugins:
-
-```bash
-# Install meltano
-pipx install meltano
-# Initialize meltano within this directory
-cd target-iceberg
-meltano install
-```
-
-Now you can test and orchestrate using Meltano:
-
-```bash
-# Test invocation:
-meltano invoke target-iceberg --version
-# OR run a test `elt` pipeline with the Carbon Intensity sample tap:
-meltano run tap-carbon-intensity target-iceberg
-```
-
-### SDK Dev Guide
-
-See the [dev guide](https://sdk.meltano.com/en/latest/dev_guide.html) for more instructions on how to use the Meltano Singer SDK to
-develop your own Singer taps and targets.
+The schema conversion code isn't very robust, and only sometimes works on nested columns. It works well for flat columns however.
