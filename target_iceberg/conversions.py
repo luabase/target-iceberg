@@ -53,7 +53,7 @@ def singer_to_pyarrow_schema_without_field_ids(
         elif "integer" in type:
             return pa.int64()
         elif "number" in type:
-            return pa.float64()
+            return pa.decimal128(38,10)
         elif "boolean" in type:
             return pa.bool_()
         elif "array" in type:
@@ -90,7 +90,7 @@ def singer_to_pyarrow_schema_without_field_ids(
                 fields.append(pa.field(key, pa.int64(), nullable=nullable))
             elif "number" in type:
                 nullable = "null" in type
-                fields.append(pa.field(key, pa.float64(), nullable=nullable))
+                fields.append(pa.field(key, pa.decimal128(38,10), nullable=nullable))
             elif "boolean" in type:
                 nullable = "null" in type
                 fields.append(pa.field(key, pa.bool_(), nullable=nullable))
@@ -152,35 +152,71 @@ def singer_to_pyarrow_schema_without_field_ids(
     return pyarrow_schema
 
 
-def assign_pyarrow_field_ids(
-    self, pa_fields: list[PyarrowField], field_id: int = 0
-) -> Tuple[list[PyarrowField], int]:
-    """Assign field ids to the schema."""
+def assign_pyarrow_field_ids(self, fields: List[PyarrowField], field_id: int = 0) -> Tuple[List[PyarrowField], int]:
     new_fields = []
-    for field in pa_fields:
-        if isinstance(field.type, pa.StructType):
-            field_indices = list(range(field.type.num_fields))
-            struct_fields = [field.type.field(field_i) for field_i in field_indices]
-            nested_pa_fields, field_id = assign_pyarrow_field_ids(
-                self, struct_fields, field_id
-            )
-            new_fields.append(
-                pa.field(
-                    field.name,
-                    pa.struct(nested_pa_fields),
-                    nullable=field.nullable,
-                    metadata=field.metadata,
-                )
-            )
-        else:
+    
+    def process_type(field_type: pa.DataType, metadata: dict) -> Tuple[pa.DataType, int]:
+        nonlocal field_id
+        
+        if isinstance(field_type, pa.StructType):
+            new_fields = []
+            for f in field_type:
+                new_f, field_id = process_field(f)
+                new_fields.append(new_f)
+            return pa.struct(new_fields), field_id
+        elif isinstance(field_type, pa.ListType):
             field_id += 1
-            field_with_metadata = field.with_metadata(
-                {"PARQUET:field_id": f"{field_id}"}
-            )
-            new_fields.append(field_with_metadata)
+            list_metadata = metadata.copy()
+            list_metadata[b'PARQUET:field_id'] = str(field_id).encode()
+            
+            # Assign field ID to the list's value type
+            field_id += 1
+            value_metadata = {b'PARQUET:field_id': str(field_id).encode()}
+            new_value_type, field_id = process_type(field_type.value_type, value_metadata)
+            
+            # Create a new field for the list's item type
+            item_field = pa.field('item', new_value_type, metadata=value_metadata)
+            
+            return pa.list_(item_field), field_id
+        elif isinstance(field_type, pa.MapType):
+            field_id += 1
+            map_metadata = metadata.copy()
+            map_metadata[b'PARQUET:field_id'] = str(field_id).encode()
+            
+            field_id += 1
+            key_metadata = {b'PARQUET:field_id': str(field_id).encode()}
+            new_key_type, field_id = process_type(field_type.key_type, key_metadata)
+            
+            field_id += 1
+            item_metadata = {b'PARQUET:field_id': str(field_id).encode()}
+            new_item_type, field_id = process_type(field_type.item_type, item_metadata)
+            
+            return pa.map_(new_key_type, new_item_type), field_id
+        else:
+            return field_type, field_id
 
+    def process_field(field: PyarrowField) -> Tuple[PyarrowField, int]:
+        nonlocal field_id
+        
+        existing_id = field.metadata.get(b'PARQUET:field_id') if field.metadata else None
+        
+        if existing_id is not None:
+            return field, max(field_id, int(existing_id))
+        
+        field_id += 1
+        new_metadata = field.metadata.copy() if field.metadata else {}
+        new_metadata[b'PARQUET:field_id'] = str(field_id).encode()
+        
+        new_type, field_id = process_type(field.type, new_metadata)
+        new_field = pa.field(field.name, new_type, nullable=field.nullable, metadata=new_metadata)
+        
+        return new_field, field_id
+
+    for field in fields:
+        new_field, field_id = process_field(field)
+        new_fields.append(new_field)
+    
     return new_fields, field_id
-
 
 def singer_to_pyarrow_schema(self, singer_schema: dict) -> PyarrowSchema:
     """Convert singer tap json schema to pyarrow schema."""
@@ -189,7 +225,7 @@ def singer_to_pyarrow_schema(self, singer_schema: dict) -> PyarrowSchema:
     return pa.schema(pa_fields_with_field_ids)
 
 
-def pyarrow_to_pyiceberg_schema(self, pa_schema: PyarrowSchema) -> PyicebergSchema:
+def pyarrow_to_pyiceberg_schema(pa_schema: PyarrowSchema) -> PyicebergSchema:
     """Convert pyarrow schema to pyiceberg schema."""
     pyiceberg_schema = pyarrow_to_schema(pa_schema)
     return pyiceberg_schema

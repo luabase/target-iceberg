@@ -28,7 +28,7 @@ from singer_sdk.sinks import BatchSink
 class IcebergSink(BatchSink):
     """iceberg target sink class."""
 
-    max_size = 10000000
+    max_size = 100000
 
     def __init__(
         self,
@@ -103,14 +103,9 @@ class IcebergSink(BatchSink):
         except NamespaceAlreadyExistsError:
             pass
 
-        # try:
         pa_schema = conversions.singer_to_pyarrow_schema(self, self.schema)
-        # except Exception as e:
-        #     self.logger.error(f"Error converting Singer schema to PyArrow schema: {e}")
-        #     return
-
         try:
-            iceberg_schema = conversions.pyarrow_to_pyiceberg_schema(self, pa_schema)
+            iceberg_schema = conversions.pyarrow_to_pyiceberg_schema(pa_schema)
         except Exception as e:
             self.logger.error(
                 f"Error converting PyArrow schema to PyIceberg schema: {e}"
@@ -121,9 +116,6 @@ class IcebergSink(BatchSink):
             self.config.get("partition_fields"), iceberg_schema
         )
 
-        df = pd.DataFrame(context["records"])
-        pa_table = pa.Table.from_pandas(df, schema=pa_schema)
-
         iceberg_table = None
         try:
             iceberg_table = self.catalog.load_table(table_id)
@@ -131,7 +123,7 @@ class IcebergSink(BatchSink):
                 f"Table {table_id} already exists, checking for schema compatibility"
             )
             iceberg_column_names = set([f.name for f in iceberg_table.schema().fields])
-            pa_column_names = set(pa_table.schema.names)
+            pa_column_names = set(pa_schema.names)
 
             if pa_column_names - iceberg_column_names:
                 self.logger.info(
@@ -139,7 +131,7 @@ class IcebergSink(BatchSink):
                 )
                 self.logger.info("Adding new columns to the table")
                 new_iceberg_schema = conversions.pyarrow_to_pyiceberg_schema(
-                    self, pa_table.schema
+                    pa_schema
                 )
                 try:
                     with iceberg_table.update_schema() as update_schema:
@@ -162,7 +154,7 @@ class IcebergSink(BatchSink):
             else:
                 iceberg_table = self.catalog.create_table(
                     identifier=table_id,
-                    schema=pa_schema,
+                    schema=iceberg_schema
                 )
             self.logger.info(f"Table {self.stream_name} created")
 
@@ -170,6 +162,9 @@ class IcebergSink(BatchSink):
             f"Writing batch to iceberg table ({len(context['records'])} records)"
         )
         try:
+            # Iceberg can rewrite field-ids, so we need to re-convert the actual table schema back to PyArrow before writing
+            pa_schema = iceberg_table.schema().as_arrow()
+            pa_table = pa.Table.from_pylist(context['records'], schema=pa_schema)
             iceberg_table.append(pa_table)
         except Exception as e:
             self.logger.error(f"Error writing batch to iceberg table: {e}")
