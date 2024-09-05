@@ -17,6 +17,9 @@ def singer_to_pyarrow_schema_without_field_ids(
 ) -> PyarrowSchema:
     """Convert singer tap json schema to pyarrow schema."""
 
+    def is_nullable(type: List[Any]) -> bool:
+        return "null" in type or "required" not in type
+
     def process_anyof_schema(anyOf: List) -> Tuple[List, Union[str, None]]:
         """This function takes in original array of anyOf's schema detected
         and reduces it to the detected schema, based on rules, right now
@@ -36,7 +39,7 @@ def singer_to_pyarrow_schema_without_field_ids(
         ret_type = []
         if "string" in types:
             ret_type.append("string")
-        if "null" in types:
+        if is_nullable(types):
             ret_type.append("null")
         return ret_type, formats[0] if formats else None
 
@@ -75,6 +78,9 @@ def singer_to_pyarrow_schema_without_field_ids(
         """
         fields = []
 
+        if not properties:
+            return []
+
         for key, val in properties.items():
             if "type" in val.keys():
                 type = val["type"]
@@ -86,16 +92,16 @@ def singer_to_pyarrow_schema_without_field_ids(
                 type = ["string", "null"]
 
             if "integer" in type:
-                nullable = "null" in type
+                nullable = is_nullable(type)
                 fields.append(pa.field(key, pa.int64(), nullable=nullable))
             elif "number" in type:
-                nullable = "null" in type
+                nullable = is_nullable(type)
                 fields.append(pa.field(key, pa.decimal128(38,10), nullable=nullable))
             elif "boolean" in type:
-                nullable = "null" in type
+                nullable = is_nullable(type)
                 fields.append(pa.field(key, pa.bool_(), nullable=nullable))
             elif "string" in type:
-                nullable = "null" in type
+                nullable = is_nullable(type)
                 if format and level == 0:
                     # this is done to handle explicit datetime conversion
                     # which happens only at level 1 of a record
@@ -112,7 +118,7 @@ def singer_to_pyarrow_schema_without_field_ids(
                 else:
                     fields.append(pa.field(key, pa.string(), nullable=nullable))
             elif "array" in type:
-                nullable = "null" in type
+                nullable = is_nullable(type)
                 items = val.get("items")
                 if items:
                     item_type = get_pyarrow_schema_from_array(items=items, level=level)
@@ -131,17 +137,11 @@ def singer_to_pyarrow_schema_without_field_ids(
                     )
                     fields.append(pa.field(key, pa.list_(pa.null()), nullable=nullable))
             elif "object" in type:
-                nullable = "null" in type
+                nullable = is_nullable(type)
                 prop = val.get("properties")
                 inner_fields = get_pyarrow_schema_from_object(
                     properties=prop, level=level + 1
                 )
-                if not inner_fields:
-                    self.logger.warn(
-                        f"""key: {key} has no fields defined, this may cause
-                            saving parquet failure as parquet doesn't support
-                            empty/null complex types [array, structs] """
-                    )
                 fields.append(pa.field(key, pa.struct(inner_fields), nullable=nullable))
 
         return fields
@@ -196,6 +196,8 @@ def assign_pyarrow_field_ids(self, fields: List[PyarrowField], field_id: int = 0
             return field_type, field_id
 
     def process_field(field: PyarrowField) -> Tuple[PyarrowField, int]:
+        if field.name == 'item':
+            print('here')
         nonlocal field_id
         
         existing_id = field.metadata.get(b'PARQUET:field_id') if field.metadata else None
