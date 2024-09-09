@@ -19,6 +19,11 @@ def singer_to_pyarrow_schema_without_field_ids(
 
     def is_nullable(type: List[Any]) -> bool:
         return "null" in type or "required" not in type
+    
+    def is_multi_type(type: List[Any]) -> bool:
+        # check if the field has more than one type, excluding null and required
+        filtered_types = list(filter(lambda x: x not in ["null", "required"], type))
+        return len(filtered_types) > 1
 
     def process_anyof_schema(anyOf: List) -> Tuple[List, Union[str, None]]:
         """This function takes in original array of anyOf's schema detected
@@ -91,7 +96,14 @@ def singer_to_pyarrow_schema_without_field_ids(
                 self.logger.warning("type information not given")
                 type = ["string", "null"]
 
-            if "integer" in type:
+            if "object" in type or is_multi_type(type):
+                nullable = is_nullable(type)
+                prop = val.get("properties")
+                inner_fields = get_pyarrow_schema_from_object(
+                    properties=prop, level=level + 1
+                )
+                fields.append(pa.field(key, pa.struct(inner_fields), nullable=nullable))
+            elif "integer" in type:
                 nullable = is_nullable(type)
                 fields.append(pa.field(key, pa.int64(), nullable=nullable))
             elif "number" in type:
@@ -136,13 +148,6 @@ def singer_to_pyarrow_schema_without_field_ids(
                             exact item types for the list, if not null."""
                     )
                     fields.append(pa.field(key, pa.list_(pa.null()), nullable=nullable))
-            elif "object" in type:
-                nullable = is_nullable(type)
-                prop = val.get("properties")
-                inner_fields = get_pyarrow_schema_from_object(
-                    properties=prop, level=level + 1
-                )
-                fields.append(pa.field(key, pa.struct(inner_fields), nullable=nullable))
 
         return fields
 
