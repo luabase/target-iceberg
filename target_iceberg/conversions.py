@@ -4,7 +4,8 @@ Conversions from Singer schema to PyArrow schema to PyIceberg schema.
 Taken from https://github.com/SidetrekAI/target-iceberg/blob/main/target_iceberg/iceberg.py
 """
 
-from typing import cast, Any, List, Tuple, Union
+import ujson as json
+from typing import Dict, cast, Any, List, Tuple, Union
 import pyarrow as pa  # type: ignore
 from pyarrow import Schema as PyarrowSchema, Field as PyarrowField
 from pyiceberg.schema import Schema as PyicebergSchema
@@ -69,6 +70,9 @@ def singer_to_pyarrow_schema_without_field_ids(
             return pa.list_(get_pyarrow_schema_from_array(items=subitems, level=level))
         elif "object" in type:
             subproperties = cast(dict, items.get("properties"))
+            # if there are no subproperties defined in the schema, just store it as a string
+            if not subproperties:
+                return pa.string()
             return pa.struct(
                 get_pyarrow_schema_from_object(
                     properties=subproperties, level=level + 1
@@ -102,7 +106,11 @@ def singer_to_pyarrow_schema_without_field_ids(
                 inner_fields = get_pyarrow_schema_from_object(
                     properties=prop, level=level + 1
                 )
-                fields.append(pa.field(key, pa.struct(inner_fields), nullable=nullable))
+                if not inner_fields:
+                    # if there are no subproperties defined in the schema, just store it as a string
+                    fields.append(pa.field(key, pa.string(), nullable=nullable))
+                else:
+                    fields.append(pa.field(key, pa.struct(inner_fields), nullable=nullable))
             elif "integer" in type:
                 nullable = is_nullable(type)
                 fields.append(pa.field(key, pa.int64(), nullable=nullable))
@@ -236,3 +244,20 @@ def pyarrow_to_pyiceberg_schema(pa_schema: PyarrowSchema) -> PyicebergSchema:
     """Convert pyarrow schema to pyiceberg schema."""
     pyiceberg_schema = pyarrow_to_schema(pa_schema)
     return pyiceberg_schema
+
+def parse_record_for_pyarrow(record: Dict[str, Any], schema: pa.Schema) -> Dict[str, Any]:
+    parsed_record = {}
+    for field in schema:
+        field_name = field.name
+        if field_name in record:
+            if isinstance(field.type, pa.StructType) and isinstance(record[field_name], str):
+                try:
+                    parsed_record[field_name] = json.loads(record[field_name])
+                except json.JSONDecodeError:
+                    # If JSON parsing fails, keep the original string
+                    parsed_record[field_name] = record[field_name]
+            elif 'string' in str(field.type) and isinstance(record[field_name], dict) or isinstance(record[field_name], list):
+                parsed_record[field_name] = json.dumps(record[field_name])
+            else:
+                parsed_record[field_name] = record[field_name]
+    return parsed_record

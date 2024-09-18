@@ -161,10 +161,11 @@ class IcebergSink(BatchSink):
         self.logger.info(
             f"Writing batch to iceberg table ({len(context['records'])} records)"
         )
+        # Iceberg can rewrite field-ids, so we need to re-convert the actual table schema back to PyArrow before writing
+        pa_schema = iceberg_table.schema().as_arrow()
         try:
-            # Iceberg can rewrite field-ids, so we need to re-convert the actual table schema back to PyArrow before writing
-            pa_schema = iceberg_table.schema().as_arrow()
-            pa_table = pa.Table.from_pylist(context['records'], schema=pa_schema)
+            parsed_records = [conversions.parse_record_for_pyarrow(record, pa_schema) for record in context["records"]]
+            pa_table = pa.Table.from_pylist(parsed_records, schema=pa_schema)
             iceberg_table.append(pa_table)
         except Exception as e:
             self.logger.error(f"Error writing batch to iceberg table: {e}")
