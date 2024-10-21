@@ -93,8 +93,9 @@ class IcebergSink(BatchSink):
         # client.upload(context["file_path"])  # Upload file
         # Path(context["file_path"]).unlink()  # Delete local copy
 
-        namespace = self.config.get("namespace")
-        table_name = self.stream_name
+        # use lower case to maximize compatibility with query engines
+        namespace = str(self.config.get("namespace")).lower()
+        table_name = self.stream_name.lower()
         table_id = f"{namespace}.{table_name}"
 
         try:
