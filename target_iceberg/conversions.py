@@ -128,7 +128,7 @@ def singer_to_pyarrow_schema_without_field_ids(
                     if format == "date":
                         fields.append(pa.field(key, pa.date32(), nullable=nullable))
                     elif format == "time":
-                        fields.append(pa.field(key, pa.time64(), nullable=nullable))
+                        fields.append(pa.field(key, pa.time32(), nullable=nullable))
                     else:
                         fields.append(
                             pa.field(
